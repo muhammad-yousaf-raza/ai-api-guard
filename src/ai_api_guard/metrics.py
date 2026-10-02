@@ -2,13 +2,15 @@
 
 from dataclasses import dataclass
 
+from ai_api_guard.usage import TokenUsage, _require_non_negative_finite
+
 
 @dataclass(frozen=True, slots=True)
 class RequestMetrics:
     """Outcome of a single ``AIGuard.chat`` invocation.
 
-    One record covers the whole call, including any retries. It does not
-    include token or cost data.
+    One record covers the whole call, including any retries. On success, token
+    counts and cost are copied from the response. A failed call records zeros.
     """
 
     provider: str
@@ -28,6 +30,15 @@ class RequestMetrics:
 
     error_type: str | None = None
     """Exception class name when the request failed."""
+
+    input_tokens: int = 0
+    """Input tokens from the successful response, or zero after a failure."""
+
+    output_tokens: int = 0
+    """Output tokens from the successful response, or zero after a failure."""
+
+    cost: float = 0.0
+    """Cost copied from the successful response, or zero after a failure."""
 
     def __post_init__(self) -> None:
         """Reject records that cannot describe a finished request."""
@@ -52,3 +63,10 @@ class RequestMetrics:
         if not self.success and self.error_type == "":
             message = "success=False requires a non-empty error_type"
             raise ValueError(message)
+        TokenUsage(input_tokens=self.input_tokens, output_tokens=self.output_tokens)
+        _require_non_negative_finite(self.cost, "cost")
+
+    @property
+    def total_tokens(self) -> int:
+        """Return the sum of input and output tokens."""
+        return self.input_tokens + self.output_tokens

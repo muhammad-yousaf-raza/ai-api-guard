@@ -74,7 +74,9 @@ class AIGuard:
         re-raised as the same instance.
 
         One :class:`~ai_api_guard.metrics.RequestMetrics` record is emitted
-        for the finished call. Intermediate retry failures are not recorded.
+        for the finished call. On success, its token counts and cost are
+        copied from the returned response. Failures record zero usage and
+        zero cost. Intermediate retry failures are not recorded.
 
         Args:
             model: Model identifier understood by the provider.
@@ -115,6 +117,7 @@ class AIGuard:
                     attempts=attempts,
                     started=started,
                     error=None,
+                    response=response,
                 )
                 return response
 
@@ -125,9 +128,18 @@ class AIGuard:
         attempts: int,
         started: float,
         error: Exception | None,
+        response: AIResponse | None = None,
     ) -> None:
         """Record the finished request and notify the metrics callback once."""
         latency = max(0.0, self._clock() - started)
+        if error is None and response is not None:
+            input_tokens = response.input_tokens
+            output_tokens = response.output_tokens
+            cost = response.cost
+        else:
+            input_tokens = 0
+            output_tokens = 0
+            cost = 0.0
         metrics = RequestMetrics(
             provider=self._provider.name,
             model=model,
@@ -135,6 +147,9 @@ class AIGuard:
             latency=latency,
             success=error is None,
             error_type=None if error is None else type(error).__name__,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cost=cost,
         )
         if self._on_metrics is None:
             return
