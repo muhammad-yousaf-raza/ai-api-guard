@@ -8,6 +8,7 @@ from ai_api_guard.exceptions import (
     ProviderUnavailableError,
     RateLimitError,
 )
+from ai_api_guard.metrics import RequestMetrics
 from ai_api_guard.models import AIResponse
 from ai_api_guard.providers import AIProvider
 from ai_api_guard.retry import RetryPolicy
@@ -24,8 +25,10 @@ class AIGuard:
         *,
         retry_policy: RetryPolicy | None = None,
         sleep: Callable[[float], None] = time.sleep,
+        on_metrics: Callable[[RequestMetrics], None] | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
-        """Store the provider and retry settings used for chat requests.
+        """Store the provider, retry settings, and optional metrics callback.
 
         Args:
             provider: Provider implementation used for every chat call.
@@ -33,10 +36,16 @@ class AIGuard:
                 :class:`~ai_api_guard.retry.RetryPolicy`.
             sleep: Callable used to wait between attempts. Defaults to
                 :func:`time.sleep`.
+            on_metrics: Optional callback invoked once per chat call with the
+                finished request record. Callback failures are ignored.
+            clock: Monotonic clock used to measure request latency. Defaults
+                to :func:`time.monotonic`.
         """
         self._provider = provider
         self._retry_policy = RetryPolicy() if retry_policy is None else retry_policy
         self._sleep = sleep
+        self._on_metrics = on_metrics
+        self._clock = clock
 
     @property
     def provider(self) -> AIProvider:
@@ -64,6 +73,9 @@ class AIGuard:
         returned unchanged, and the exception from the final attempt is
         re-raised as the same instance.
 
+        One :class:`~ai_api_guard.metrics.RequestMetrics` record is emitted
+        for the finished call. Intermediate retry failures are not recorded.
+
         Args:
             model: Model identifier understood by the provider.
             messages: Ordered chat messages. Each mapping uses string keys and
@@ -72,12 +84,61 @@ class AIGuard:
         Returns:
             The response object returned by the provider.
         """
-        attempt = 1
+        started = self._clock()
+        attempts = 0
         while True:
+            attempts += 1
             try:
-                return self._provider.chat(model=model, messages=messages)
-            except _RETRYABLE_ERRORS:
-                if attempt >= self._retry_policy.max_attempts:
-                    raise
-                self._sleep(self._retry_policy.delay_for_attempt(attempt))
-                attempt += 1
+                response = self._provider.chat(model=model, messages=messages)
+            except _RETRYABLE_ERRORS as error:
+                if attempts < self._retry_policy.max_attempts:
+                    self._sleep(self._retry_policy.delay_for_attempt(attempts))
+                    continue
+                self._emit_metrics(
+                    model=model,
+                    attempts=attempts,
+                    started=started,
+                    error=error,
+                )
+                raise
+            except Exception as error:
+                self._emit_metrics(
+                    model=model,
+                    attempts=attempts,
+                    started=started,
+                    error=error,
+                )
+                raise
+            else:
+                self._emit_metrics(
+                    model=model,
+                    attempts=attempts,
+                    started=started,
+                    error=None,
+                )
+                return response
+
+    def _emit_metrics(
+        self,
+        *,
+        model: str,
+        attempts: int,
+        started: float,
+        error: Exception | None,
+    ) -> None:
+        """Record the finished request and notify the metrics callback once."""
+        latency = max(0.0, self._clock() - started)
+        metrics = RequestMetrics(
+            provider=self._provider.name,
+            model=model,
+            attempts=attempts,
+            latency=latency,
+            success=error is None,
+            error_type=None if error is None else type(error).__name__,
+        )
+        if self._on_metrics is None:
+            return
+        try:
+            self._on_metrics(metrics)
+        except Exception:  # noqa: BLE001
+            return

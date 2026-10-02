@@ -12,6 +12,7 @@ from ai_api_guard.exceptions import (
     RateLimitError,
 )
 from ai_api_guard.guard import AIGuard
+from ai_api_guard.metrics import RequestMetrics
 from ai_api_guard.models import AIResponse
 from ai_api_guard.providers import AIProvider
 from ai_api_guard.retry import RetryPolicy
@@ -28,6 +29,7 @@ __all__ = [
     "ProviderTimeoutError",
     "ProviderUnavailableError",
     "RateLimitError",
+    "RequestMetrics",
     "RetryPolicy",
     "__version__",
 ]
