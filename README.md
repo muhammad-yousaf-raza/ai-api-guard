@@ -6,6 +6,7 @@ OpenAI is the first supported provider adapter. It covers synchronous chat compl
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776AB.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
+[![CI](https://github.com/muhammad-yousaf-raza/ai-api-guard/actions/workflows/ci.yml/badge.svg)](https://github.com/muhammad-yousaf-raza/ai-api-guard/actions/workflows/ci.yml)
 
 ## Why AI API Guard?
 
