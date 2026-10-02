@@ -18,7 +18,6 @@ keywords = [
     "openai",
     "reliability",
     "observability",
-    "rate-limiting",
     "retry",
     "cost-tracking"
 ]
