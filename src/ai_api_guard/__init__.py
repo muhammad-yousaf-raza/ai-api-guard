@@ -14,6 +14,7 @@ from ai_api_guard.exceptions import (
 from ai_api_guard.guard import AIGuard
 from ai_api_guard.models import AIResponse
 from ai_api_guard.providers import AIProvider
+from ai_api_guard.retry import RetryPolicy
 
 __version__ = "0.1.0"
 
@@ -27,5 +28,6 @@ __all__ = [
     "ProviderTimeoutError",
     "ProviderUnavailableError",
     "RateLimitError",
+    "RetryPolicy",
     "__version__",
 ]
