@@ -4,6 +4,7 @@ A provider-independent Python toolkit for adding reliability, observability, usa
 
 OpenAI is the first supported provider adapter. It covers synchronous chat completions. The library does not replace provider SDKs. It wraps a provider you supply.
 
+[![PyPI](https://img.shields.io/pypi/v/ai-api-guard)](https://pypi.org/project/ai-api-guard/)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776AB.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
 [![CI](https://github.com/muhammad-yousaf-raza/ai-api-guard/actions/workflows/ci.yml/badge.svg)](https://github.com/muhammad-yousaf-raza/ai-api-guard/actions/workflows/ci.yml)
@@ -37,7 +38,21 @@ Not implemented yet:
 
 ## Installation
 
-This package is not published to PyPI yet. Install it from source.
+Install the package from [PyPI](https://pypi.org/project/ai-api-guard/):
+
+```bash
+pip install ai-api-guard
+```
+
+For OpenAI support:
+
+```bash
+pip install "ai-api-guard[openai]"
+```
+
+The OpenAI extra installs the official OpenAI Python SDK. `OpenAIProvider()` does not take a hard-coded API key. When you omit `api_key` and `client`, the SDK reads `OPENAI_API_KEY` from the environment.
+
+To install from a local checkout instead of PyPI:
 
 ```bash
 git clone https://github.com/muhammad-yousaf-raza/ai-api-guard.git
@@ -45,18 +60,7 @@ cd ai-api-guard
 python -m pip install -e ".[openai]"
 ```
 
-Omit `[openai]` if you only need the provider-independent core.
-
-After a PyPI release, the intended commands are:
-
-```bash
-pip install ai-api-guard
-pip install "ai-api-guard[openai]"
-```
-
-Those release commands are not available today.
-
-The OpenAI extra installs the official OpenAI Python SDK. `OpenAIProvider()` does not take a hard-coded API key. When you omit `api_key` and `client`, the SDK reads `OPENAI_API_KEY` from the environment.
+Omit `[openai]` if you only need the provider-independent core. Development dependencies are covered under [Development](#development).
 
 ## Quick start
 
