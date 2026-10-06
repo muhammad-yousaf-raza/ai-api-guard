@@ -110,6 +110,8 @@ guard = AIGuard(OpenAIProvider(), retry_policy=policy)
 
 These values are also the defaults. After a retryable failure, the guard waits `initial_delay` seconds, then multiplies that delay by `backoff_multiplier` for each later failure. The wait never exceeds `max_delay`.
 
+A provider may set `retry_after` on a retryable error. The value is a delay in seconds requested by the server, such as an HTTP Retry-After hint. When it is present, it replaces the exponential delay for that attempt. It is not added to the calculated delay, and it is still capped at `max_delay`. `retry_after=0.0` waits for zero seconds. The next attempt uses its own `retry_after` when the provider supplies one. Otherwise that attempt returns to the exponential delay for its attempt number.
+
 `AIGuard` retries only:
 
 - `RateLimitError`

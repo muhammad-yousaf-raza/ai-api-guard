@@ -72,3 +72,37 @@ def test_delay_for_attempt_rejects_attempt_below_one() -> None:
 
     with pytest.raises(ValueError, match="attempt"):
         policy.delay_for_attempt(0)
+
+
+def test_missing_retry_after_uses_exponential_delay() -> None:
+    policy = RetryPolicy(initial_delay=0.5, max_delay=8.0, backoff_multiplier=2.0)
+
+    assert policy.delay_for_retry(1, retry_after=None) == policy.delay_for_attempt(1)
+    assert policy.delay_for_retry(2, retry_after=None) == 1.0
+
+
+def test_retry_after_replaces_exponential_delay() -> None:
+    policy = RetryPolicy(initial_delay=0.5, max_delay=8.0, backoff_multiplier=2.0)
+
+    assert policy.delay_for_retry(1, retry_after=0.25) == 0.25
+    assert policy.delay_for_retry(2, retry_after=3) == 3.0
+
+
+def test_retry_after_is_capped_by_max_delay() -> None:
+    policy = RetryPolicy(initial_delay=0.5, max_delay=8.0)
+
+    assert policy.delay_for_retry(1, retry_after=30) == 8.0
+    assert policy.delay_for_retry(1, retry_after=8) == 8.0
+
+
+def test_zero_retry_after_waits_zero_seconds() -> None:
+    policy = RetryPolicy(initial_delay=0.5, max_delay=8.0)
+
+    assert policy.delay_for_retry(1, retry_after=0.0) == 0.0
+
+
+def test_retry_after_rejects_invalid_attempt() -> None:
+    policy = RetryPolicy()
+
+    with pytest.raises(ValueError, match="attempt"):
+        policy.delay_for_retry(0, retry_after=1.0)

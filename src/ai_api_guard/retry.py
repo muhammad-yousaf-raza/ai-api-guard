@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass
 
+from ai_api_guard.exceptions import _validate_retry_after
+
 
 @dataclass(frozen=True, slots=True)
 class RetryPolicy:
@@ -9,7 +11,8 @@ class RetryPolicy:
 
     ``max_attempts`` is the total number of provider calls, including the
     first attempt. The delay after each failure grows exponentially from
-    ``initial_delay`` and never exceeds ``max_delay``.
+    ``initial_delay`` and never exceeds ``max_delay``. A server-supplied
+    delay can replace that calculation for one attempt.
     """
 
     max_attempts: int = 3
@@ -70,3 +73,29 @@ class RetryPolicy:
         if delay > self.max_delay:
             return self.max_delay
         return delay
+
+    def delay_for_retry(self, attempt: int, *, retry_after: float | None = None) -> float:
+        """Return the delay, in seconds, before the next attempt.
+
+        A server-supplied ``retry_after`` replaces the exponential delay for
+        this attempt. It is not added to that delay, and it is not combined
+        with :meth:`delay_for_attempt` by taking the greater value. The
+        result never exceeds ``max_delay``. ``None`` uses the exponential
+        schedule. ``0.0`` waits for zero seconds.
+
+        Args:
+            attempt: The failed attempt that just occurred. Must be >= 1.
+            retry_after: Server-requested delay in seconds, or ``None``.
+
+        Returns:
+            The delay to wait before the next attempt.
+        """
+        validated = _validate_retry_after(retry_after)
+        if validated is None:
+            return self.delay_for_attempt(attempt)
+        if attempt < 1:
+            message = f"attempt must be >= 1, got {attempt}"
+            raise ValueError(message)
+        if validated > self.max_delay:
+            return self.max_delay
+        return validated

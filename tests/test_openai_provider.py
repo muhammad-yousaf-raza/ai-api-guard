@@ -1,7 +1,9 @@
 """Tests for the optional OpenAI adapter. No network calls are made."""
 
+import email.utils
 import subprocess
 import sys
+import time
 from typing import Any
 
 import pytest
@@ -301,6 +303,101 @@ def test_sdk_errors_are_translated() -> None:
 
         assert type(caught.value) is guard_type
         assert caught.value.__cause__ is original
+        assert caught.value.retry_after is None
+
+
+class _Headers:
+    """Minimal header map with the ``get`` method the adapter reads."""
+
+    def __init__(self, values: dict[str, str]) -> None:
+        self._values = values
+
+    def get(self, name: str) -> str | None:
+        return self._values.get(name)
+
+
+class _Response:
+    """Minimal SDK response that exposes headers only."""
+
+    def __init__(self, headers: _Headers) -> None:
+        self.headers = headers
+
+
+def _rate_limit_error(headers: dict[str, str] | None) -> BaseException:
+    openai = pytest.importorskip("openai")
+    error = _sdk_error(openai.RateLimitError)
+    if headers is not None:
+        error.response = _Response(_Headers(headers))
+    return error
+
+
+def _chat_rate_limit(headers: dict[str, str] | None) -> RateLimitError:
+    original = _rate_limit_error(headers)
+    provider = OpenAIProvider(client=_Client(_Completions(error=original)))
+
+    with pytest.raises(RateLimitError, match="rate limit") as caught:
+        provider.chat(model="requested-model", messages=_MESSAGES)
+
+    assert type(caught.value) is RateLimitError
+    assert caught.value.__cause__ is original
+    assert "response" not in vars(caught.value)
+    return caught.value
+
+
+@pytest.mark.parametrize(
+    ("headers", "expected"),
+    [
+        ({"retry-after-ms": "1500"}, 1.5),
+        ({"retry-after": "2"}, 2.0),
+        ({"retry-after-ms": "1500", "retry-after": "9"}, 1.5),
+        ({"retry-after-ms": "soon", "retry-after": "4"}, 4.0),
+        ({}, None),
+        ({"retry-after": "soon"}, None),
+        ({"retry-after": "-5"}, None),
+        ({"retry-after": "nan"}, None),
+        ({"retry-after": "inf"}, None),
+        ({"retry-after": "-inf"}, None),
+        ({"retry-after-ms": "-1", "retry-after": "5"}, None),
+    ],
+)
+def test_openai_rate_limit_retry_after(
+    headers: dict[str, str],
+    expected: float | None,
+) -> None:
+    error = _chat_rate_limit(headers)
+
+    assert error.retry_after == expected
+
+
+def test_openai_rate_limit_without_response_has_no_retry_after() -> None:
+    error = _chat_rate_limit(None)
+
+    assert error.retry_after is None
+
+
+def test_openai_future_http_date_is_a_positive_delay() -> None:
+    future = email.utils.formatdate(time.time() + 30, usegmt=True)
+    error = _chat_rate_limit({"retry-after": future})
+
+    assert error.retry_after is not None
+    assert 0.0 < error.retry_after <= 30.0
+
+
+def test_openai_past_http_date_waits_zero_seconds() -> None:
+    past = email.utils.formatdate(time.time() - 30, usegmt=True)
+    error = _chat_rate_limit({"retry-after": past})
+
+    assert error.retry_after == 0.0
+
+
+def test_http_date_retry_after_uses_supplied_clock() -> None:
+    from ai_api_guard.providers.openai import _retry_after_from_headers
+
+    headers = {"retry-after": "Thu, 01 Jan 1970 00:00:30 GMT"}
+
+    assert _retry_after_from_headers(headers, now=0.0) == 30.0
+    assert _retry_after_from_headers(headers, now=30.0) == 0.0
+    assert _retry_after_from_headers(headers, now=31.0) == 0.0
 
 
 def test_non_openai_errors_are_not_translated() -> None:

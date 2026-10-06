@@ -68,10 +68,12 @@ class AIGuard:
         ``RateLimitError``, ``ProviderTimeoutError``, and
         ``ProviderUnavailableError`` are retried until ``max_attempts``
         provider calls have been made. The wait before each additional call
-        comes from :meth:`~ai_api_guard.retry.RetryPolicy.delay_for_attempt`.
-        Any other exception is raised immediately. A successful response is
-        returned unchanged, and the exception from the final attempt is
-        re-raised as the same instance.
+        comes from :meth:`~ai_api_guard.retry.RetryPolicy.delay_for_retry`.
+        When the error carries ``retry_after``, that server delay replaces
+        the exponential delay for that attempt and is capped at
+        ``max_delay``. Any other exception is raised immediately. A
+        successful response is returned unchanged, and the exception from
+        the final attempt is re-raised as the same instance.
 
         One :class:`~ai_api_guard.metrics.RequestMetrics` record is emitted
         for the finished call. On success, its token counts and cost are
@@ -94,7 +96,11 @@ class AIGuard:
                 response = self._provider.chat(model=model, messages=messages)
             except _RETRYABLE_ERRORS as error:
                 if attempts < self._retry_policy.max_attempts:
-                    self._sleep(self._retry_policy.delay_for_attempt(attempts))
+                    delay = self._retry_policy.delay_for_retry(
+                        attempts,
+                        retry_after=error.retry_after,
+                    )
+                    self._sleep(delay)
                     continue
                 self._emit_metrics(
                     model=model,
