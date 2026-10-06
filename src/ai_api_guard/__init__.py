@@ -18,7 +18,7 @@ from ai_api_guard.providers import AIProvider
 from ai_api_guard.retry import RetryEvent, RetryPolicy
 from ai_api_guard.usage import ModelPricing, TokenUsage, calculate_cost
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "AIGuard",

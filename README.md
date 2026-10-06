@@ -19,15 +19,15 @@ AI API Guard is a small orchestration layer in front of a provider. Your code ca
 
 - Provider-independent `AIProvider` abstraction
 - `AIGuard` orchestration
-- Configurable retries with exponential backoff
-- Retries for transient provider failures
-- Request metrics callback
-- Latency measurement and attempt tracking
-- Token usage tracking
-- Caller-supplied pricing and cost calculation
+- Configurable exponential retry and backoff
+- Provider Retry-After hints, capped by `max_delay`
+- Opt-in equal jitter, off by default
+- `RetryEvent` / `on_retry` for retries that will actually happen
+- One final request-metrics record per call
+- Token usage tracking and caller-supplied cost calculation
 - Provider-independent exception hierarchy
 - Optional OpenAI adapter
-- Typed, tested Python API
+- Typed public API
 
 Not implemented yet:
 
@@ -127,6 +127,8 @@ A provider may set `retry_after` on a retryable error. The value is a delay in s
 - `ProviderUnavailableError`
 
 The final failure is re-raised unchanged. `AuthenticationError`, a generic `ProviderError`, and any other exception are not retried.
+
+The OpenAI SDK may retry inside its client before `OpenAIProvider` receives the final exception. `AIGuard` can then apply its own retry policy, so one call can wait in both layers. If you supply your own OpenAI client, set that client's `max_retries` when retries should be controlled in one place.
 
 ## Observability
 
@@ -270,7 +272,7 @@ The test suite does not call the OpenAI API and does not need an API key.
 
 ## Project status
 
-AI API Guard is pre-alpha (version 0.1.0). Public APIs may change before 1.0.
+AI API Guard is pre-alpha (version 0.2.0). Public APIs may change before 1.0.
 
 ## Contributing
 

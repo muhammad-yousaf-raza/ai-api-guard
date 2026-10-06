@@ -9,8 +9,8 @@ class AIProvider(ABC):
     """Contract for a chat-capable AI provider.
 
     Concrete providers turn a provider-neutral message list into an
-    :class:`~ai_api_guard.models.AIResponse`. This package does not include
-    a built-in provider.
+    :class:`~ai_api_guard.models.AIResponse`. OpenAI support is an optional
+    adapter and is not imported by ``import ai_api_guard``.
     """
 
     @property
