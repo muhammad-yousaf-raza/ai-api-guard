@@ -125,6 +125,100 @@ class RetryPolicy:
         return (base - span) + (span * draw)
 
 
+@dataclass(frozen=True, slots=True)
+class RetryEvent:
+    """One retry that ``AIGuard`` is about to perform.
+
+    ``attempt`` is the provider call that just failed. ``next_attempt`` is
+    the call that will follow ``delay``. ``delay`` is the actual wait, in
+    seconds. ``retry_after`` is the server hint before ``max_delay`` caps
+    it, or ``None`` when the policy schedule selected the wait.
+    """
+
+    provider: str
+    """Name of the provider that failed."""
+
+    model: str
+    """Model identifier supplied by the caller."""
+
+    attempt: int
+    """1-based provider call that just failed."""
+
+    next_attempt: int
+    """Provider call that will be made after the wait."""
+
+    delay: float
+    """Seconds the guard will wait before the next attempt."""
+
+    error_type: str
+    """Class name of the failure that triggered this retry."""
+
+    retry_after: float | None = None
+    """Server-requested seconds before capping, or ``None`` for policy delay."""
+
+    def __post_init__(self) -> None:
+        """Reject events that do not describe a real upcoming retry."""
+        _require_non_empty_string(self.provider, "provider")
+        _require_non_empty_string(self.model, "model")
+        _require_attempt_number(self.attempt, "attempt")
+        _require_attempt_number(self.next_attempt, "next_attempt")
+        if self.next_attempt != self.attempt + 1:
+            message = (
+                "next_attempt must be attempt + 1, "
+                f"got attempt={self.attempt} and next_attempt={self.next_attempt}"
+            )
+            raise ValueError(message)
+        object.__setattr__(self, "delay", _validate_delay(self.delay))
+        _require_non_empty_string(self.error_type, "error_type")
+        object.__setattr__(self, "retry_after", _validate_retry_after(self.retry_after))
+
+
+def _require_non_empty_string(value: object, name: str) -> None:
+    """Reject missing or blank text fields."""
+    if not isinstance(value, str):
+        message = f"{name} must be a non-empty string, got {type(value).__name__}"
+        raise TypeError(message)
+    if value == "":
+        message = f"{name} must be a non-empty string"
+        raise ValueError(message)
+
+
+def _require_attempt_number(value: object, name: str) -> None:
+    """Reject booleans and any integer below 1."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        message = f"{name} must be an integer >= 1, got {type(value).__name__}"
+        raise TypeError(message)
+    if value < 1:
+        message = f"{name} must be >= 1, got {value}"
+        raise ValueError(message)
+
+
+def _validate_delay(value: object) -> float:
+    """Return a finite delay in seconds."""
+    if isinstance(value, bool):
+        message = "delay must be a non-negative number, got bool"
+        raise TypeError(message)
+    if isinstance(value, int):
+        if value < 0:
+            message = f"delay must be >= 0, got {value}"
+            raise ValueError(message)
+        return float(value)
+    if isinstance(value, float):
+        if math.isnan(value):
+            message = "delay must not be NaN"
+            raise ValueError(message)
+        if math.isinf(value):
+            sign = "positive" if value > 0 else "negative"
+            message = f"delay must not be {sign} infinity"
+            raise ValueError(message)
+        if value < 0:
+            message = f"delay must be >= 0, got {value}"
+            raise ValueError(message)
+        return value
+    message = f"delay must be a non-negative number, got {type(value).__name__}"
+    raise TypeError(message)
+
+
 def _finite_number(value: object, name: str) -> float:
     """Return a finite float, rejecting booleans and other types."""
     if isinstance(value, bool):

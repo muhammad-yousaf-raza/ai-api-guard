@@ -130,7 +130,29 @@ The final failure is re-raised unchanged. `AuthenticationError`, a generic `Prov
 
 ## Observability
 
-Pass `on_metrics` to receive one `RequestMetrics` record for each `chat` call. Intermediate retry attempts do not emit their own records.
+Pass `on_metrics` to receive one `RequestMetrics` record for each `chat` call. Intermediate retries are not separate metrics records.
+
+Pass `on_retry` to observe a retry that will actually happen. It runs before the wait. It does not run for a successful first call, a non-retryable error, or the final exhausted attempt.
+
+```python
+from ai_api_guard import AIGuard, RetryEvent
+from ai_api_guard.providers.openai import OpenAIProvider
+
+
+def handle_retry(event: RetryEvent) -> None:
+    print(event.attempt)
+    print(event.next_attempt)
+    print(event.delay)
+    print(event.retry_after)
+    print(event.error_type)
+
+
+guard = AIGuard(OpenAIProvider(), on_retry=handle_retry)
+```
+
+`attempt` is the provider call that just failed. `next_attempt` is the call that follows the wait. `delay` is the actual wait in seconds. `retry_after` is the server hint before `max_delay` caps it, or `None` when the policy schedule chose the delay.
+
+If `handle_retry` raises, that exception is ignored. The wait and the next provider call still happen.
 
 ```python
 from ai_api_guard import AIGuard, RequestMetrics

@@ -5,7 +5,7 @@ from collections.abc import Callable
 
 import pytest
 
-from ai_api_guard import RetryPolicy
+from ai_api_guard import RetryEvent, RetryPolicy
 
 
 def test_default_retry_policy_values() -> None:
@@ -277,3 +277,98 @@ def test_random_source_is_excluded_from_repr_and_equality() -> None:
 
     assert left == right
     assert "unit_random" not in repr(left)
+
+
+def _retry_event(**overrides: object) -> RetryEvent:
+    fields: dict[str, object] = {
+        "provider": "recording",
+        "model": "test-model",
+        "attempt": 1,
+        "next_attempt": 2,
+        "delay": 0.5,
+        "error_type": "RateLimitError",
+        "retry_after": None,
+    }
+    fields.update(overrides)
+    return RetryEvent(**fields)  # type: ignore[arg-type]
+
+
+def test_retry_event_accepts_a_normal_record() -> None:
+    event = _retry_event(delay=2, retry_after=3)
+
+    assert event.provider == "recording"
+    assert event.model == "test-model"
+    assert event.attempt == 1
+    assert event.next_attempt == 2
+    assert event.delay == 2.0
+    assert isinstance(event.delay, float)
+    assert event.error_type == "RateLimitError"
+    assert event.retry_after == 3.0
+    assert isinstance(event.retry_after, float)
+
+
+def test_retry_event_allows_missing_server_hint_and_zero_delay() -> None:
+    event = _retry_event(delay=0, retry_after=None)
+
+    assert event.delay == 0.0
+    assert event.retry_after is None
+
+
+def test_retry_event_rejects_empty_provider() -> None:
+    with pytest.raises(ValueError, match="provider"):
+        _retry_event(provider="")
+
+
+def test_retry_event_rejects_empty_model() -> None:
+    with pytest.raises(ValueError, match="model"):
+        _retry_event(model="")
+
+
+def test_retry_event_rejects_attempt_below_one() -> None:
+    with pytest.raises(ValueError, match="attempt"):
+        _retry_event(attempt=0, next_attempt=1)
+
+
+@pytest.mark.parametrize("attempt", [True, False])
+def test_retry_event_rejects_bool_attempt(attempt: bool) -> None:
+    with pytest.raises(TypeError, match="attempt"):
+        _retry_event(attempt=attempt, next_attempt=2)
+
+
+def test_retry_event_rejects_next_attempt_that_skips() -> None:
+    with pytest.raises(ValueError, match="next_attempt"):
+        _retry_event(attempt=1, next_attempt=3)
+
+
+def test_retry_event_rejects_negative_delay() -> None:
+    with pytest.raises(ValueError, match="delay"):
+        _retry_event(delay=-0.1)
+
+
+@pytest.mark.parametrize("delay", [True, False, "1", object()])
+def test_retry_event_rejects_non_numeric_delay(delay: object) -> None:
+    with pytest.raises(TypeError, match="delay"):
+        _retry_event(delay=delay)
+
+
+@pytest.mark.parametrize("delay", [math.nan, math.inf, -math.inf])
+def test_retry_event_rejects_non_finite_delay(delay: float) -> None:
+    with pytest.raises(ValueError, match="delay"):
+        _retry_event(delay=delay)
+
+
+def test_retry_event_rejects_empty_error_type() -> None:
+    with pytest.raises(ValueError, match="error_type"):
+        _retry_event(error_type="")
+
+
+@pytest.mark.parametrize("retry_after", [-1, math.nan, math.inf, "3", object()])
+def test_retry_event_rejects_invalid_retry_after(retry_after: object) -> None:
+    with pytest.raises((TypeError, ValueError), match="retry_after"):
+        _retry_event(retry_after=retry_after)
+
+
+@pytest.mark.parametrize("retry_after", [True, False])
+def test_retry_event_rejects_bool_retry_after(retry_after: bool) -> None:
+    with pytest.raises(TypeError, match="retry_after"):
+        _retry_event(retry_after=retry_after)

@@ -15,7 +15,7 @@ from ai_api_guard.guard import AIGuard
 from ai_api_guard.metrics import RequestMetrics
 from ai_api_guard.models import AIResponse
 from ai_api_guard.providers import AIProvider
-from ai_api_guard.retry import RetryPolicy
+from ai_api_guard.retry import RetryEvent, RetryPolicy
 from ai_api_guard.usage import ModelPricing, TokenUsage, calculate_cost
 
 __version__ = "0.1.0"
@@ -32,6 +32,7 @@ __all__ = [
     "ProviderUnavailableError",
     "RateLimitError",
     "RequestMetrics",
+    "RetryEvent",
     "RetryPolicy",
     "TokenUsage",
     "__version__",

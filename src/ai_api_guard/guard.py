@@ -4,6 +4,7 @@ import time
 from collections.abc import Callable
 
 from ai_api_guard.exceptions import (
+    ProviderError,
     ProviderTimeoutError,
     ProviderUnavailableError,
     RateLimitError,
@@ -11,7 +12,7 @@ from ai_api_guard.exceptions import (
 from ai_api_guard.metrics import RequestMetrics
 from ai_api_guard.models import AIResponse
 from ai_api_guard.providers import AIProvider
-from ai_api_guard.retry import RetryPolicy
+from ai_api_guard.retry import RetryEvent, RetryPolicy
 
 _RETRYABLE_ERRORS = (RateLimitError, ProviderTimeoutError, ProviderUnavailableError)
 
@@ -26,9 +27,10 @@ class AIGuard:
         retry_policy: RetryPolicy | None = None,
         sleep: Callable[[float], None] = time.sleep,
         on_metrics: Callable[[RequestMetrics], None] | None = None,
+        on_retry: Callable[[RetryEvent], None] | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
-        """Store the provider, retry settings, and optional metrics callback.
+        """Store the provider, retry settings, and optional callbacks.
 
         Args:
             provider: Provider implementation used for every chat call.
@@ -38,6 +40,9 @@ class AIGuard:
                 :func:`time.sleep`.
             on_metrics: Optional callback invoked once per chat call with the
                 finished request record. Callback failures are ignored.
+            on_retry: Optional callback invoked before each wait that will be
+                followed by another provider call. Callback failures are
+                ignored.
             clock: Monotonic clock used to measure request latency. Defaults
                 to :func:`time.monotonic`.
         """
@@ -45,6 +50,7 @@ class AIGuard:
         self._retry_policy = RetryPolicy() if retry_policy is None else retry_policy
         self._sleep = sleep
         self._on_metrics = on_metrics
+        self._on_retry = on_retry
         self._clock = clock
 
     @property
@@ -77,6 +83,10 @@ class AIGuard:
         successful response is returned unchanged, and the exception from
         the final attempt is re-raised as the same instance.
 
+        ``on_retry`` runs only when another attempt will happen, after the
+        wait is chosen and before ``sleep``. The same delay value is slept.
+        Callback failures are ignored.
+
         One :class:`~ai_api_guard.metrics.RequestMetrics` record is emitted
         for the finished call. On success, its token counts and cost are
         copied from the returned response. Failures record zero usage and
@@ -102,6 +112,7 @@ class AIGuard:
                         attempts,
                         retry_after=error.retry_after,
                     )
+                    self._notify_retry(model=model, attempt=attempts, delay=delay, error=error)
                     self._sleep(delay)
                     continue
                 self._emit_metrics(
@@ -128,6 +139,31 @@ class AIGuard:
                     response=response,
                 )
                 return response
+
+    def _notify_retry(
+        self,
+        *,
+        model: str,
+        attempt: int,
+        delay: float,
+        error: ProviderError,
+    ) -> None:
+        """Tell ``on_retry`` about a wait that will be followed by another call."""
+        if self._on_retry is None:
+            return
+        event = RetryEvent(
+            provider=self._provider.name,
+            model=model,
+            attempt=attempt,
+            next_attempt=attempt + 1,
+            delay=delay,
+            error_type=type(error).__name__,
+            retry_after=error.retry_after,
+        )
+        try:
+            self._on_retry(event)
+        except Exception:  # noqa: BLE001
+            return
 
     def _emit_metrics(
         self,

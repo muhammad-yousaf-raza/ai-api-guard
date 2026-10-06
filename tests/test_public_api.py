@@ -10,6 +10,7 @@ from ai_api_guard import (
     ProviderTimeoutError,
     ProviderUnavailableError,
     RateLimitError,
+    RetryEvent,
 )
 
 
@@ -22,3 +23,5 @@ def test_new_public_objects_import_from_package() -> None:
     assert RateLimitError is ai_api_guard.RateLimitError
     assert ProviderTimeoutError is ai_api_guard.ProviderTimeoutError
     assert ProviderUnavailableError is ai_api_guard.ProviderUnavailableError
+    assert RetryEvent is ai_api_guard.RetryEvent
+    assert "RetryEvent" in ai_api_guard.__all__

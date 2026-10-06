@@ -2,7 +2,7 @@
 
 import pytest
 
-from ai_api_guard import AIGuard, RetryPolicy
+from ai_api_guard import AIGuard, RequestMetrics, RetryEvent, RetryPolicy
 from ai_api_guard.exceptions import (
     AuthenticationError,
     ProviderError,
@@ -552,6 +552,335 @@ def test_final_exception_identity_is_preserved_with_jitter() -> None:
 
     assert caught.value is final_error
     assert sleep.delays == [0.25]
+
+
+class _RetryLog:
+    """Records retry notifications and the sleeps that follow them."""
+
+    def __init__(self) -> None:
+        self.events: list[RetryEvent] = []
+        self.steps: list[tuple[str, float]] = []
+
+    def on_retry(self, event: RetryEvent) -> None:
+        self.events.append(event)
+        self.steps.append(("retry", event.delay))
+
+    def sleep(self, delay: float) -> None:
+        self.steps.append(("sleep", delay))
+
+
+def _failing_retry(_event: RetryEvent) -> None:
+    message = "observer failed"
+    raise RuntimeError(message)
+
+
+def test_retry_events_fire_once_per_actual_retry() -> None:
+    final_error = ProviderUnavailableError("three")
+    errors = [RateLimitError("one"), ProviderTimeoutError("two"), final_error]
+    provider = _ScriptedProvider(list(errors))
+    log = _RetryLog()
+    guard = AIGuard(
+        provider,
+        retry_policy=RetryPolicy(max_attempts=3, initial_delay=0.5),
+        sleep=log.sleep,
+        on_retry=log.on_retry,
+    )
+
+    with pytest.raises(ProviderUnavailableError) as caught:
+        guard.chat(
+            model="test-model",
+            messages=[{"role": "user", "content": "Hello"}],
+        )
+
+    assert caught.value is final_error
+    assert [(event.attempt, event.next_attempt, event.error_type) for event in log.events] == [
+        (1, 2, "RateLimitError"),
+        (2, 3, "ProviderTimeoutError"),
+    ]
+    assert log.steps == [
+        ("retry", 0.5),
+        ("sleep", 0.5),
+        ("retry", 1.0),
+        ("sleep", 1.0),
+    ]
+
+
+def test_successful_first_attempt_emits_no_retry_event() -> None:
+    response = AIResponse(content="ok", model="test-model")
+    provider = _ScriptedProvider([response])
+    log = _RetryLog()
+    guard = AIGuard(provider, sleep=log.sleep, on_retry=log.on_retry)
+
+    result = guard.chat(
+        model="test-model",
+        messages=[{"role": "user", "content": "Hello"}],
+    )
+
+    assert result is response
+    assert log.events == []
+    assert log.steps == []
+
+
+def test_final_exhausted_attempt_emits_no_retry_event() -> None:
+    error = RateLimitError("limited")
+    provider = _ScriptedProvider([error])
+    log = _RetryLog()
+    guard = AIGuard(
+        provider,
+        retry_policy=RetryPolicy(max_attempts=1),
+        sleep=log.sleep,
+        on_retry=log.on_retry,
+    )
+
+    with pytest.raises(RateLimitError) as caught:
+        guard.chat(
+            model="test-model",
+            messages=[{"role": "user", "content": "Hello"}],
+        )
+
+    assert caught.value is error
+    assert log.events == []
+    assert log.steps == []
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        AuthenticationError("denied"),
+        AuthenticationError("denied", retry_after=5.0),
+        ProviderError("generic"),
+        RuntimeError("boom"),
+    ],
+)
+def test_non_retryable_errors_emit_no_retry_event(error: Exception) -> None:
+    provider = _ScriptedProvider([error])
+    log = _RetryLog()
+    guard = AIGuard(
+        provider,
+        retry_policy=RetryPolicy(max_attempts=3, initial_delay=0.5),
+        sleep=log.sleep,
+        on_retry=log.on_retry,
+    )
+
+    with pytest.raises(type(error)) as caught:
+        guard.chat(
+            model="test-model",
+            messages=[{"role": "user", "content": "Hello"}],
+        )
+
+    assert caught.value is error
+    assert log.events == []
+    assert log.steps == []
+
+
+def test_zero_delay_still_emits_a_retry_event() -> None:
+    response = AIResponse(content="ok", model="test-model")
+    provider = _ScriptedProvider([RateLimitError("limited"), response])
+    log = _RetryLog()
+    guard = AIGuard(
+        provider,
+        retry_policy=RetryPolicy(max_attempts=2, initial_delay=0.0, max_delay=8.0),
+        sleep=log.sleep,
+        on_retry=log.on_retry,
+    )
+
+    result = guard.chat(
+        model="test-model",
+        messages=[{"role": "user", "content": "Hello"}],
+    )
+
+    assert result is response
+    assert log.events[0].delay == 0.0
+    assert log.steps == [("retry", 0.0), ("sleep", 0.0)]
+
+
+def test_retry_event_records_jittered_delay() -> None:
+    response = AIResponse(content="ok", model="test-model")
+    provider = _ScriptedProvider([ProviderTimeoutError("slow"), response])
+    log = _RetryLog()
+    guard = AIGuard(
+        provider,
+        retry_policy=RetryPolicy(
+            max_attempts=2,
+            initial_delay=0.5,
+            jitter=1.0,
+            unit_random=lambda: 0.0,
+        ),
+        sleep=log.sleep,
+        on_retry=log.on_retry,
+    )
+
+    result = guard.chat(
+        model="test-model",
+        messages=[{"role": "user", "content": "Hello"}],
+    )
+
+    assert result is response
+    assert log.events[0].delay == 0.25
+    assert log.events[0].retry_after is None
+    assert log.steps == [("retry", 0.25), ("sleep", 0.25)]
+
+
+def test_retry_event_records_server_delay() -> None:
+    response = AIResponse(content="ok", model="test-model")
+    provider = _ScriptedProvider(
+        [RateLimitError("limited", retry_after=3.0), response],
+    )
+    log = _RetryLog()
+    guard = AIGuard(
+        provider,
+        retry_policy=RetryPolicy(max_attempts=2, initial_delay=0.5),
+        sleep=log.sleep,
+        on_retry=log.on_retry,
+    )
+
+    result = guard.chat(
+        model="test-model",
+        messages=[{"role": "user", "content": "Hello"}],
+    )
+
+    assert result is response
+    assert log.events[0].delay == 3.0
+    assert log.events[0].retry_after == 3.0
+    assert log.steps == [("retry", 3.0), ("sleep", 3.0)]
+
+
+def test_capped_retry_after_keeps_original_hint() -> None:
+    response = AIResponse(content="ok", model="test-model")
+    provider = _ScriptedProvider(
+        [RateLimitError("limited", retry_after=30.0), response],
+    )
+    log = _RetryLog()
+    guard = AIGuard(
+        provider,
+        retry_policy=RetryPolicy(max_attempts=2, max_delay=8.0),
+        sleep=log.sleep,
+        on_retry=log.on_retry,
+    )
+
+    result = guard.chat(
+        model="test-model",
+        messages=[{"role": "user", "content": "Hello"}],
+    )
+
+    assert result is response
+    assert log.events[0].delay == 8.0
+    assert log.events[0].retry_after == 30.0
+    assert log.steps == [("retry", 8.0), ("sleep", 8.0)]
+
+
+def test_retry_callback_runs_before_sleep_with_the_same_delay() -> None:
+    response = AIResponse(content="ok", model="test-model")
+    provider = _ScriptedProvider([RateLimitError("limited"), response])
+    log = _RetryLog()
+    guard = AIGuard(
+        provider,
+        retry_policy=RetryPolicy(max_attempts=2, initial_delay=0.5),
+        sleep=log.sleep,
+        on_retry=log.on_retry,
+    )
+
+    result = guard.chat(
+        model="test-model",
+        messages=[{"role": "user", "content": "Hello"}],
+    )
+
+    assert result is response
+    assert log.steps == [("retry", 0.5), ("sleep", 0.5)]
+    assert log.events[0].delay == 0.5
+
+
+def test_retry_callback_exception_does_not_prevent_retry() -> None:
+    response = AIResponse(content="ok", model="test-model")
+    provider = _ScriptedProvider([RateLimitError("limited"), response])
+    sleep = _SleepRecorder()
+    guard = AIGuard(
+        provider,
+        retry_policy=RetryPolicy(max_attempts=2, initial_delay=0.5),
+        sleep=sleep,
+        on_retry=_failing_retry,
+    )
+
+    result = guard.chat(
+        model="test-model",
+        messages=[{"role": "user", "content": "Hello"}],
+    )
+
+    assert result is response
+    assert sleep.delays == [0.5]
+
+
+def test_retry_callback_exception_preserves_final_exception() -> None:
+    final_error = ProviderTimeoutError("final")
+    provider = _ScriptedProvider([RateLimitError("first"), final_error])
+    sleep = _SleepRecorder()
+    guard = AIGuard(
+        provider,
+        retry_policy=RetryPolicy(max_attempts=2, initial_delay=0.5),
+        sleep=sleep,
+        on_retry=_failing_retry,
+    )
+
+    with pytest.raises(ProviderTimeoutError) as caught:
+        guard.chat(
+            model="test-model",
+            messages=[{"role": "user", "content": "Hello"}],
+        )
+
+    assert caught.value is final_error
+    assert sleep.delays == [0.5]
+
+
+def test_retry_events_do_not_change_final_metrics() -> None:
+    response = AIResponse(content="ok", model="test-model")
+    provider = _ScriptedProvider(
+        [
+            RateLimitError("one"),
+            ProviderUnavailableError("two"),
+            response,
+        ],
+    )
+    events: list[RetryEvent] = []
+    metrics: list[RequestMetrics] = []
+    guard = AIGuard(
+        provider,
+        retry_policy=RetryPolicy(max_attempts=3, initial_delay=0.0, max_delay=8.0),
+        sleep=lambda _delay: None,
+        on_retry=events.append,
+        on_metrics=metrics.append,
+    )
+
+    result = guard.chat(
+        model="test-model",
+        messages=[{"role": "user", "content": "Hello"}],
+    )
+
+    assert result is response
+    assert [event.attempt for event in events] == [1, 2]
+    assert [event.next_attempt for event in events] == [2, 3]
+    assert len(metrics) == 1
+    assert metrics[0].attempts == 3
+    assert metrics[0].success is True
+    assert metrics[0].error_type is None
+
+
+def test_default_guard_retries_without_on_retry() -> None:
+    response = AIResponse(content="ok", model="test-model")
+    provider = _ScriptedProvider([RateLimitError("limited"), response])
+    sleep = _SleepRecorder()
+    guard = AIGuard(
+        provider,
+        retry_policy=RetryPolicy(max_attempts=2, initial_delay=0.5),
+        sleep=sleep,
+    )
+
+    result = guard.chat(
+        model="test-model",
+        messages=[{"role": "user", "content": "Hello"}],
+    )
+
+    assert result is response
+    assert sleep.delays == [0.5]
 
 
 def test_ai_guard_imports_from_package() -> None:
