@@ -71,7 +71,9 @@ class AIGuard:
         comes from :meth:`~ai_api_guard.retry.RetryPolicy.delay_for_retry`.
         When the error carries ``retry_after``, that server delay replaces
         the exponential delay for that attempt and is capped at
-        ``max_delay``. Any other exception is raised immediately. A
+        ``max_delay``. That server delay is not jittered. When ``jitter``
+        is enabled, only the exponential delay is spread. Any other
+        exception is raised immediately. A
         successful response is returned unchanged, and the exception from
         the final attempt is re-raised as the same instance.
 
